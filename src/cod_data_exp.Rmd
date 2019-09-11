@@ -1,0 +1,68 @@
+---
+title: "cod data exploration"
+author: "Samantha Andrews"
+output: html_notebook
+---
+
+# Overview
+A note to anyone who might happen to stumble across this... I am a beginner in R and have had no exposure to similar languages. I don't know what I'm doing. The code herein is unlikely to be elegant and there area probably more efficient ways of running the code.
+
+Built with 'r getRversion()'..
+
+# Package dependencies
+You can install and load them using the following code which uses a function called [ipak](https://gist.github.com/stevenworthington/3178163). Note this function checks to see if the packages are installed first before loading.
+
+one shot installation
+```{r}
+install.packages("devtools")
+library(devtools)
+install_github("iobis/robis")
+```
+
+
+```{r pre-install & load packages, include=FALSE}
+packages <- c("rworldmap", "sp", "rgdal", "robis", "raster")
+source("../src/ipak.R")
+ipak(packages)
+```
+
+
+download cod data from obis
+```{r}
+cod <- occurrence("Gadus morhua", startdate = "1998-01-01", enddate = "2015-12-31", geometry = "POLYGON ((-78.22266 65.44000, -32.34375 65.73063, -32.69531 35.88905, -76.99219 36.03133, -78.22266 65.14611, -78.22266 65.44000))")
+```
+
+trim to the capelin mcp
+```{r}
+mcp <- shapefile("../data/bio/minimum_convex_poly/mcp_capelin_100_poly.shp")
+plot(mcp)
+```
+
+the mcp is in aea format so you will need to reproject the cod data to aea first...
+
+```{r reproject to aea}
+xy <- cod[ ,c("decimalLongitude","decimalLatitude")] #3 = decimalLongitude, 2 = decimalLatitude
+codsp <- SpatialPointsDataFrame(coords = xy, data = cod, proj4string = CRS("+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0"))
+codsp <- spTransform(codsp, CRS = "+proj=aea +lat_1=50 +lat_2=70 +lat_0=40 +lon_0=-60 +x_0=0 +y_0=0 +ellps=GRS80 +datum=NAD83 +units=m +no_defs") #note -60 used to be -91. Changed to 'straighten up'
+plot(codsp)
+plot(mcp, add = TRUE)
+```
+
+
+```{r}
+codsub <- codsp[mcp, ] #this is just subsetting 
+write.csv(codsub, "../data/bio/cod_mcp.csv", row.names = FALSE)
+cod <- as.data.frame(codsub)
+plot(mcp)
+points(codsub)
+```
+
+ok lets get rid of a bunch of these columns...
+
+
+```{r select colums needed}
+colnames(cod)
+
+cod <- subset(cod, select = c(id, decimalLatitude, decimalLongitude, date, year, month, institutionCode, individualCount, depth, originalScientificName, collectionCode, lifeStage))
+head(cod)
+```
