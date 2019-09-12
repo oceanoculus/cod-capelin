@@ -46,5 +46,6 @@ packrat/lib*/
 *.png
 *.ascii
 *.shp
+/data/
 
 

@@ -21,7 +21,7 @@ install_github("iobis/robis")
 
 
 ```{r pre-install & load packages, include=FALSE}
-packages <- c("rworldmap", "sp", "rgdal", "robis", "raster")
+packages <- c("rworldmap", "sp", "rgdal", "robis", "raster", "dplyr", "rworldmap")
 source("../src/ipak.R")
 ipak(packages)
 ```
@@ -61,8 +61,242 @@ ok lets get rid of a bunch of these columns...
 
 
 ```{r select colums needed}
+cod <- read.csv("../data/bio/cod_mcp.csv", header = TRUE)
+
 colnames(cod)
 
-cod <- subset(cod, select = c(id, decimalLatitude, decimalLongitude, date, year, month, institutionCode, individualCount, depth, originalScientificName, collectionCode, lifeStage))
-head(cod)
+cods <- subset(cod, select = c(id, decimalLatitude, decimalLongitude, year, month, eventDate, institutionCode, individualCount, depth, originalScientificName, collectionCode, lifeStage))
 ```
+
+remove data without month/year info
+
+
+```{r}
+missingdata <- apply(cods, 2, function (x) sum(is.na(x))) #shows the no of rows missing data in each column
+missingdata
+```
+
+so year and month are missing for some but event date has all data...
+```{r}
+datedat <- subset(cods, select = c(year, month, eventDate))
+missingmth <- datedat[is.na(datedat$month),]
+head(missingmth)
+```
+
+ok so only a few do have full date info in eventDate... manually change these
+```{r}
+cods$month[4208] = 7
+cods$month[11845] = 7
+cods$month[12153] = 7
+```
+
+remove all rows without date information
+```{r}
+cods <- cods[!is.na(cods$month), ]
+missingdata <- apply(cods, 2, function (x) sum(is.na(x))) #shows the no of rows missing data in each column
+missingdata
+```
+
+now remove all those missing depth information
+```{r}
+cods <- cods[!is.na(cods$depth), ]
+missingdata <- apply(cods, 2, function (x) sum(is.na(x))) #shows the no of rows missing data in each column
+write.csv(cods, "../data/bio/cod_mcp.csv", row.names = FALSE)
+missingdata
+```
+
+
+#add non-env. data
+
+occurrence indicator
+```{r}
+cods$occurrence <- "1"
+```
+
+ Add NAFO Region occurrence is from
+NAFO Zones shapefile obtained from [NAFO](https://www.nafo.int/Data/GIS)
+
+```{r NAFO shapefile extraction}
+coordinates(cods) <- c("decimalLongitude", "decimalLatitude") 
+nafo_zones <- readOGR(dsn=path.expand("../data/bio/nafo_zones"), layer = "nafo_zones_wgs84") #this loads the shapefile
+proj4string(cods) <- proj4string(nafo_zones) #tells R that the occurrence data is the same projection as the shapefile
+cods$nafo_zone <- over(cods, nafo_zones)$ZONE #ZONE is where the zone data is held in teh shapefiles' attributes
+cods <- as.data.frame(cods)
+#check to see if any are missing nafo zones
+
+
+missingdata <- subset(cods, is.na(cods$nafo_zone))
+missingdata
+```
+
+ok sot here are 31 missing nafo zones let's look
+
+```{r}
+map2 <- getMap(resolution = "low") #creates an object called map at low resoultion
+plot(map2, xlim = c(-70, -43), ylim =c(38, 70), asp = 1, main = "Occurences missing a NAFO Zone", col = "cornsilk") #the x and y lim are the long-lat bounds of the map
+points(missingdata$decimalLongitude, missingdata$decimalLatitude, col = "red") #this adds points to the mapet", xlab = "Longitude", ylab = "Latitude")
+```
+ok so some are in the hudson, some are clearly on land...
+
+Start with the Hudson Strait ones as this is easy - anything above 56N, nafo_zone == "HudsonStrait"
+
+```{r}
+cods$nafo_zone <- as.character(cods$nafo_zone)
+cods[is.na(cods)] <- "xx"
+cods$nafo_zone[cods$nafo_zone == "xx" & cods$decimalLatitude > 56] <- "HudsonStrait"
+```
+and map to check
+```{r}
+nafo_na <- subset(cods, nafo_zone == "xx")
+plot(map2, xlim = c(-70, -43), ylim =c(38, 70), asp = 1, main = "Occurences missing a NAFO Zone", col = "cornsilk") #the x and y lim are the long-lat bounds of the map
+points(nafo_na$decimalLongitude, nafo_na$decimalLatitude, col = "red") #this adds points to the mapet", xlab = "Longitude", ylab = "Latitude")
+```
+so now i need to account for the others (either as occuring on land or just in an area that is missing a NAFO Zone tag) which is more tricky... i might just do this bit in ArcGIS quickly.
+```{r}
+write.csv(cods, file = "../data/bio/cod_mcp.csv", row.names = FALSE) 
+```
+
+so the remaining missing nafo zones indicate points on land. remove
+```{r}
+cods <- cods[!(cods$nafo_zone == "xx"), ]
+write.csv(cods, file = "../data/bio/cod_mcp.csv", row.names = FALSE) 
+```
+
+
+# create a unique cell ID
+
+A unique cell ID layer has been created in the environmental_data_preperation.Rmd. Now you want to extract the value of that layer to the .csv you are creating...
+
+Load the env. data - you can just use the glorys layer or the biomer layer as they are identical
+```{r}
+cell_layer <- raster("../data/env/unique_cell_lyr/glo_unique_cell.tif") #this is loading the cell layer that was created and saved as a tif
+plot(cell_layer)
+```
+
+The occurrence data needs to be converted into spatialpoints dataframe
+```{r}
+xy <- cods[ ,c("decimalLongitude","decimalLatitude")] #3 = decimalLongitude, 2 = decimalLatitude
+codsp <- SpatialPointsDataFrame(coords = xy, data = cods, proj4string = CRS("+proj=longlat +datum=WGS84 +ellps=WGS84 +towgs84=0,0,0"))
+codsp <- spTransform(codsp, CRS = "+proj=aea +lat_1=50 +lat_2=70 +lat_0=40 +lon_0=-60 +x_0=0 +y_0=0 +ellps=GRS80 +datum=NAD83 +units=m +no_defs") #note -60 used to be -91. Changed to 'straighten up'
+```
+and plot and Write the transformed species data to a new csv (this will also have the coordinates in meters - note meters are under decimalLongitude1 and decimalLatitude1)...
+```{r}
+plot(codsp, axes=TRUE, cex.axis=.95)
+write.csv(codsp, file = "../data/bio/cod_mcp_aea.csv", row.names = FALSE)
+```
+
+Ok now plot the env. and point data  and then extract the cell values
+```{r}
+plot(cell_layer)
+points(codsp$decimalLongitude, codsp$decimalLatitude)
+codsp$cell_id <- extract(x=cell_layer, y = codsp)
+write.csv(codsp, file = "../data/bio/cod_mcp_aea.csv", row.names = FALSE)
+cods <- as.data.frame(codsp)
+head(cods)
+```
+
+# Add AMO Data
+
+The data has been prepared as per the environmental_data_preperation.Rmd, and biological_data_prep.Rmd in ch1
+
+So you want..
+- AMO value at sampling month/year
+- AMO value at previous sampling month/year
+- AMO phase at previous winter (because the winter values are thought to be a major driver of ocean conditions in the following spring, summer, and autumn)
+
+Load the prepared amo_prev.csv file with has the amo at different year/month steps
+```{r}
+amo_prev <- read.csv("../data/env/amo_prev.csv", header = TRUE)
+```
+
+now match the year and the month in the two dataframes, and populate the background points with amo_sample
+```{r}
+cods <- merge(x = cods, y = amo_prev[ , c("year", "month", "amo_sample")], by = c("year", "month"), all.x = TRUE)
+head(cods)
+```
+
+ok next - AMO value at previous sampling month/year 
+```{r}
+cods <- merge(x = cods, y = amo_prev[ , c("year", "month", "amo_prev")], by = c("year", "month"), all.x = TRUE)
+head(cods)
+```
+
+and now - AMO phase at previous winter (because the winter values are thought to be a major driver of ocean conditions in the following spring, summer, and autumn) (note they are in a different .csv)
+
+```{r}
+amo_winter <- read.csv("../data/env/amo_winter.csv")
+cods <- merge(x = cods, y = amo_winter[ , c("year", "WinterAvgShifted")], by = c("year"), all.x = TRUE)
+colnames(cods)[colnames(cods)=="WinterAvgShifted"] <- "amo_winter" #change the colname
+head(cods)
+```
+
+# NAO values
+The data has been prepared as per the environmental_data_preperation.Rmd and biological_data_prep.Rmd
+
+So you want..
+- NAO value at sampling month/year
+- NAO value at previous sampling month/year
+- NAO phase at previous winter (because the winter values are thought to be a major driver of ocean conditions in the following spring, summer, and autumn)
+
+Load the prepared nao_prev.csv file with has the amo at different year/month steps
+```{r}
+nao_prev <- read.csv("../data/env/nao_prev.csv", header = TRUE)
+```
+
+now match the year and the month in the two dataframes, and populate the background points with nao_sample
+
+```{r}
+cods <- merge(x = cods, y = nao_prev[ , c("year", "month", "nao_sample")], by = c("year", "month"), all.x = TRUE)
+```
+
+ok next - NAO value at previous sampling month/year
+```{r}
+cods <- merge(x = cods, y = nao_prev[ , c("year", "month", "nao_prev")], by = c("year", "month"), all.x = TRUE)
+```
+
+and now - NAO phase at previous winter (because the winter values are thought to be a major driver of ocean conditions in the following spring, summer, and autumn). The data is in a different .CSV
+
+```{r}
+nao_winter <- read.csv("../data/env/nao_winter.csv")
+cods <- merge(x = cods, y = nao_winter[ , c("year", "WinterAvgShifted")], by = c("year"), all.x = TRUE)
+colnames(cods)[colnames(cods)=="WinterAvgShifted"] <- "nao_winter" #change the colname
+head(cods)
+```
+
+and write .csv
+```{r}
+write.csv(cods,"../data/bio/cod_mcp.csv", row.names = FALSE)
+```
+
+#depth layer
+
+the depth layers in the netCDF are literal slices. Currently I have listed the depthlayerno (which is literally which layer in the netcdf). I should also add the depth_layer name which gives the depth the slice is supposed to represent. Data is stored in depth_bin.csv
+
+load the depth bin csv
+```{r}
+depthbin <- read.csv("../data/env/depth_bin.csv", header = TRUE) 
+```
+
+so basically what i want to do is, where depthbin$layer_no = background_all$depthlayerno, extract depthbin$layer_name and add to background_all$depth_layer. Can use the merge function.
+First need to change depthbin col names to match background_all
+
+```{r}
+names(depthbin)[names(depthbin)=="layer_no"] <- "depthlayerno"
+names(depthbin)[names(depthbin)=="layer_name"] <- "depth_layer" #this one is just so i don't have to change the column name in the background_all file later
+head(depthbin)
+```
+
+Now run some fancy if loop (courtesy of [TinglTanglBob] (https://stackoverflow.com/questions/52626995/problem-with-loop-to-add-values-from-one-dataframe-and-to-another-based-on-condi/52627728#52627728))
+```{r}
+check_depth <- function(d_temp)
+{
+  #print(d_temp)
+  if(is.na(d_temp)) return(NA) # if d_temp is na just return NA 
+  layer_name_temp <- depthbin$layer_name[which(depthbin$bin_min <= d_temp & depthbin$bin_max >= d_temp)]
+  if(length(layer_name_temp) > 1) layer_name_temp <- layer_name_temp[1] # in case there are more hits, the first one is taken
+  return(layer_name_temp)
+}
+
+cods$depth_layer <- sapply(cods$depth, check_depth)
+```
+
