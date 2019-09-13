@@ -21,7 +21,7 @@ install_github("iobis/robis")
 
 
 ```{r pre-install & load packages, include=FALSE}
-packages <- c("rworldmap", "sp", "rgdal", "robis", "raster", "dplyr", "rworldmap")
+packages <- c("rworldmap", "sp", "rgdal", "robis", "raster", "dplyr", "rworldmap", "plyr", "weathermetrics", "ncdf4")
 source("../src/ipak.R")
 ipak(packages)
 ```
@@ -278,7 +278,7 @@ depthbin <- read.csv("../data/env/depth_bin.csv", header = TRUE)
 ```
 
 so basically what i want to do is, where depthbin$layer_no = background_all$depthlayerno, extract depthbin$layer_name and add to background_all$depth_layer. Can use the merge function.
-First need to change depthbin col names to match background_all
+First need to change depthbin col names to match cods
 
 ```{r}
 names(depthbin)[names(depthbin)=="layer_no"] <- "depthlayerno"
@@ -288,6 +288,8 @@ head(depthbin)
 
 Now run some fancy if loop (courtesy of [TinglTanglBob] (https://stackoverflow.com/questions/52626995/problem-with-loop-to-add-values-from-one-dataframe-and-to-another-based-on-condi/52627728#52627728))
 ```{r}
+cods$depth <- as.integer(cods$depth)
+
 check_depth <- function(d_temp)
 {
   #print(d_temp)
@@ -298,6 +300,143 @@ check_depth <- function(d_temp)
 }
 
 cods$depth_layer <- sapply(cods$depth, check_depth)
+head(cods)
 ```
 
-fdwafasgfad
+ok now dow the same thing to get your layer_no
+```{r}
+check_depth <- function(d_temp)
+{
+  #print(d_temp)
+  if(is.na(d_temp)) return(NA) # if d_temp is na just return NA 
+  layer_no_temp <- depthbin$depthlayerno[which(depthbin$bin_min <= d_temp & depthbin$bin_max >= d_temp)]
+  if(length(layer_no_temp) > 1) layer_no_temp <- layer_no_temp[1] # in case there are more hits, the first one is taken
+  return(layer_no_temp)
+}
+
+cods$depthlayerno <- sapply(cods$depth, check_depth)
+
+write.csv(cods, "../data/bio/cod_mcp.csv", row.names =  FALSE)
+
+```
+
+
+# observations by cell (in total, and also by time step)
+
+as the title says... how many observations happeend in each cell:
+- in total
+- in each yyyymm
+
+```{r observation by cell - total}
+obs_by_cell <- count(cods, "cell_id")
+obs_by_cell
+write.csv(obs_by_cell, file = "../data/bio/no_observations_cell.csv")
+```
+
+
+```{r}
+obs_cell_yymm <- count(cods, c("cell_id", "year", "month"))
+obs_cell_yymm
+write.csv(obs_cell_yymm, file = "../data/bio/no_observations_cell_yymm.csv")
+```
+Now attach these values to cods....
+
+total obs for the whole time period
+```{r}
+cods <- merge(cods, obs_by_cell, by="cell_id")
+head(cods)
+```
+
+rename freq column to something meaningful
+
+```{r}
+names(cods)[names(cods)=="freq"] <- "total_cell_obs_xy"
+head(cods)
+```
+
+
+time-sliced
+```{r}
+cods <- merge(cods, obs_cell_yymm, by.x=c("cell_id", "year", "month"), by.y=c("cell_id", "year", "month"))
+names(cods)[names(cods)=="freq"] <- "total_cell_obs_xyt"
+head(cods)
+```
+
+time-sliced by depth
+
+```{r}
+obs_cell_yymm_depth <- count(cods, c("cell_id", "year", "month", "depthlayerno"))
+cods <- merge(cods, obs_cell_yymm_depth, by.x=c("cell_id", "year", "month", "depthlayerno"), by.y=c("cell_id", "year", "month", "depthlayerno"))
+names(cods)[names(cods)=="freq"] <- "total_cell_obs_xyzt"
+head(cods)
+```
+
+write to .csv
+```{r}
+write.csv(cods,"../data/bio/cod_mcp.csv", row.names = FALSE)
+```
+
+#attach oceanographic data
+```{r}
+xy <- cods[ ,c("decimalLongitude.1","decimalLatitude.1")] # This is to tell R where the coordinates are (in column 18 and 19). Note that the column order needs to be longitude, latitude
+cods_sp <- SpatialPointsDataFrame(coords = xy, data = cods, proj4string = CRS("+proj=aea +lat_1=50 +lat_2=70 +lat_0=40 +lon_0=-60 +x_0=0 +y_0=0 +ellps=GRS80 +datum=NAD83 +units=m +no_defs")) # The CRS is used here is for the albers equal area projection.
+```
+
+```{r}
+netcdf_list <- list.files("../data/env/netcdf", pattern = '*.nc', full.names = TRUE) #true means the full path is included
+no_netcdf <- length(netcdf_list) #for the loop - need to know how many files to cycle through
+netcdf_name <- list.files("../data/env/netcdf", pattern = '*.nc', full.names = FALSE) #false means the path is not includedCores
+
+for (i in 1:no_netcdf) {  
+  library(raster)
+  print(netcdf_name[i]) #this just prints the name of the netCDF R is working one
+  brkyr <- as.integer(sapply(strsplit(netcdf_name[i], "_"), "[[", 1)) # extracting the first part of the netcdf filename (which is the year)
+  brkmth <- as.integer(sapply(strsplit(netcdf_name[i], "_"), "[[", 2)) # extracting the second part of the netcdf filename (which is the month)
+  brkvar <- (sapply(strsplit(netcdf_name[i], "_"), "[[", 3)) # extracting the third part of the netcdf (inc.nc)
+  temp_brick <- brick(netcdf_list[i], lvar = 4)
+  temp_brick <- projectRaster(temp_brick, aea) 
+    for (j in 1:nrow(cods_sp)) {  
+      de <- cods_sp$depthlayerno[[j]]  # a variable for the observation depth layer
+      yr <- (cods_sp$year[j])  # a variable for the observation year
+      mth <- (cods_sp$month[j])  # a variable for the observation month
+          if (brkyr == yr & brkmth == mth & brkvar == "temp.nc"){
+              cods_sp$temp_surface[j] <- extract(x=temp_brick[[1]], y = cods_sp[j, ]) 
+              if (is.na(de)){
+                cods_sp$temp_depth[j] <- NA
+              } else  
+                cods_sp$temp_depth[j] <- extract(x=temp_brick[[de]], y = cods_sp[j, ])
+          } else if (brkyr == yr & brkmth == mth & brkvar == "salinity.nc") {
+              cods_sp$salinity_surface[j] <- extract(x=temp_brick[[1]], y = cods_sp[j, ]) 
+              if (is.na(de)){
+                cods_sp$salinity_depth[j] <- NA
+              } else  
+                cods_sp$salinity_depth[j] <- extract(x=temp_brick[[de]], y = cods_sp[j, ]) 
+          } else if (brkyr == yr & brkmth == mth & brkvar == "chl.nc") {
+              cods_sp$chl_surface[j] <- extract(x=temp_brick[[1]], y = cods_sp[j, ]) 
+              if (is.na(de)){
+                cods_sp$chl_depth[j] <- NA
+              } else  
+                cods_sp$chl_depth[j] <- extract(x=temp_brick[[de]], y = cods_sp[j, ]) 
+          } else if (brkyr == yr & brkmth == mth & brkvar == "o2.nc") {
+              cods_sp$o2_surface[j] <- extract(x=temp_brick[[1]], y = cods_sp[j, ]) 
+              if (is.na(de)){
+                cods_sp$o2_depth[j] <- NA
+              } else  
+                cods_sp$o2_depth[j] <- extract(x=temp_brick[[de]], y = cods_sp[j, ]) 
+          } else if (brkyr == yr & brkmth == mth & brkvar == "mlp.nc") {
+              cods_sp$mlp_surface[j] <- extract(x=temp_brick[[1]], y = cods_sp[j, ])
+          } else if (brkyr == yr & brkmth == mth & brkvar == "ssh.nc") {
+              cods_sp$ssh_surface[j] <- extract(x=temp_brick[[1]], y = cods_sp[j, ]) 
+            
+          }
+     
+    }
+}
+cods <- as.data.frame(cods_sp)
+write.csv(cods,"../output/bio/presence_points_without_envdata_relooped.csv", row.names = FALSE)
+head(cods_sp$chl_depth)
+```
+
+
+
+
