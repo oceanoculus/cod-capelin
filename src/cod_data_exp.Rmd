@@ -21,7 +21,7 @@ install_github("iobis/robis")
 
 
 ```{r pre-install & load packages, include=FALSE}
-packages <- c("rworldmap", "sp", "rgdal", "robis", "raster", "dplyr", "rworldmap", "plyr", "weathermetrics", "ncdf4")
+packages <- c("rworldmap", "sp", "rgdal", "robis", "raster", "dplyr", "rworldmap", "plyr", "weathermetrics", "ncdf4", "ma")
 source("../src/ipak.R")
 ipak(packages)
 ```
@@ -461,9 +461,64 @@ cods$temp_celsius_surface <- kelvin.to.celsius(cods$temp_surface, round = 4)
 write.csv(cods, "../data/bio/cod_all.csv", row.names = FALSE)
 ```
 
+rename lon lat meters columns and remove eventdate
+
+```{r}
+names(cods)[names(cods)=="decimalLatitude.1"] <- "latitude_meters" 
+names(cods)[names(cods)=="decimalLongitude.1"] <- "longitude_meters" 
+cods <- subset(cods, select = -c(eventDate))
+colnames(cods)
+```
+
+bottom depth from [GEBCO](www.gebco.net)
+
+```{r}
+bat <-readGEBCO.bathy("../data/env/GEBCO_2014_2D_-70.0_34.0_-43.0_70.0.nc")
+summary(bat)
+cods$bottom_depth <- get.depth(bat, cods[ , 7:6], locator = FALSE)
+cods$bottom_depth <- cods$bottom_depth[, 3] #this step is because get.bath actually produces it's own dataframe with long, lat, and depth. This is extracting the depth column and deplacing b$bottom_depth with the correct data.
+```
+
+add a cell id
+
+```{r cell_id_3d}
+cods$cell_id_3d <- paste(cods$cell_id, cods$depthlayerno, sep="_") #create a new column that is a unique cell_id & depth ID.
+cods$cell_id_xyzt <- paste(cods$cell_id_3d, cods$year, cods$month, sep="_") #create a new column that is a unique cell_id & depth ID. 
+head(cods)
+```
+
 #load background points (generated from paper 2...)
 
 ```{r}
+bk <- read.csv("../data/env/background_all.csv", header = TRUE)
+```
 
+compare col headings
+```{r}
+cn <- colnames(cods)
+bn <- colnames(bk)
+difn <- setdiff(cn, bn)
+difn
+```
+
+change cods originalScientificName to all lowercase
+```{r}
+names(cods)[names(cods)=="originalScientificName"] <- "originalscientificname" 
+```
+
+compare col headings (other way round)
+```{r}
+cn <- colnames(cods)
+bn <- colnames(bk)
+difn <- setdiff(bn, cn)
+difn
+```
+
+"institutionCode" "individualCount" "depth" "collectionCode" "lifeStage" all need to be NA in the bkpoints... use rbind.fill
+
+```{r}
+codcomp <- rbind.fill(cods, bk)
+colnames(codcomp)
+write.csv(codcomp, "../data/bio/cod_prab.csv", row.names = FALSE)
 ```
 
