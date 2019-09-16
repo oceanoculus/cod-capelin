@@ -277,12 +277,12 @@ load the depth bin csv
 depthbin <- read.csv("../data/env/depth_bin.csv", header = TRUE) 
 ```
 
-so basically what i want to do is, where depthbin$layer_no = background_all$depthlayerno, extract depthbin$layer_name and add to background_all$depth_layer. Can use the merge function.
+so basically what i want to do is, where depthbin$layer_no = cods$depthlayerno, extract depthbin$layer_name and add to cods$depth_layer. Can use the merge function.
 First need to change depthbin col names to match cods
 
 ```{r}
 names(depthbin)[names(depthbin)=="layer_no"] <- "depthlayerno"
-names(depthbin)[names(depthbin)=="layer_name"] <- "depth_layer" #this one is just so i don't have to change the column name in the background_all file later
+names(depthbin)[names(depthbin)=="layer_name"] <- "depth_layer" #this one is just so i don't have to change the column name in the cods file later
 head(depthbin)
 ```
 
@@ -378,65 +378,92 @@ write.csv(cods,"../data/bio/cod_mcp.csv", row.names = FALSE)
 
 #attach oceanographic data
 ```{r}
-xy <- cods[ ,c("decimalLongitude.1","decimalLatitude.1")] # This is to tell R where the coordinates are (in column 18 and 19). Note that the column order needs to be longitude, latitude
-cods_sp <- SpatialPointsDataFrame(coords = xy, data = cods, proj4string = CRS("+proj=aea +lat_1=50 +lat_2=70 +lat_0=40 +lon_0=-60 +x_0=0 +y_0=0 +ellps=GRS80 +datum=NAD83 +units=m +no_defs")) # The CRS is used here is for the albers equal area projection.
+cods <- read.csv("../data/bio/cod_mcp.csv", header = TRUE)
+
+cods$temp_depth <- NA
+cods$temp_surface <- NA
+cods$salinity_depth <- NA
+cods$salinity_surface <- NA
+cods$chl_depth <- NA
+cods$chl_surface <- NA
+cods$o2_depth <- NA
+cods$o2_surface <- NA
+cods$mlp_surface <- NA
+cods$ssh_surface <- NA
+
 ```
 
+you will be better to do this year by year
 ```{r}
+xy <- cods[ ,c("decimalLongitude.1","decimalLatitude.1")] # This is to tell R where the coordinates are (in column 18 and 19). Note that the column order needs to be longitude, latitude
+cod_sp <- SpatialPointsDataFrame(coords = xy, data = cods, proj4string = CRS("+proj=aea +lat_1=50 +lat_2=70 +lat_0=40 +lon_0=-60 +x_0=0 +y_0=0 +ellps=GRS80 +datum=NAD83 +units=m +no_defs")) # The CRS is used here is for the albers equal area projection.
+
+
 netcdf_list <- list.files("../data/env/netcdf", pattern = '*.nc', full.names = TRUE) #true means the full path is included
 no_netcdf <- length(netcdf_list) #for the loop - need to know how many files to cycle through
-netcdf_name <- list.files("../data/env/netcdf", pattern = '*.nc', full.names = FALSE) #false means the path is not includedCores
-
+netcdf_name <- list.files("../data/env/netcdf", pattern = '*.nc', full.names = FALSE) #false means the path is not included
+aea <- raster("../data/env/aea.tif") 
 for (i in 1:no_netcdf) {  
-  library(raster)
   print(netcdf_name[i]) #this just prints the name of the netCDF R is working one
   brkyr <- as.integer(sapply(strsplit(netcdf_name[i], "_"), "[[", 1)) # extracting the first part of the netcdf filename (which is the year)
   brkmth <- as.integer(sapply(strsplit(netcdf_name[i], "_"), "[[", 2)) # extracting the second part of the netcdf filename (which is the month)
   brkvar <- (sapply(strsplit(netcdf_name[i], "_"), "[[", 3)) # extracting the third part of the netcdf (inc.nc)
   temp_brick <- brick(netcdf_list[i], lvar = 4)
   temp_brick <- projectRaster(temp_brick, aea) 
-    for (j in 1:nrow(cods_sp)) {  
-      de <- cods_sp$depthlayerno[[j]]  # a variable for the observation depth layer
-      yr <- (cods_sp$year[j])  # a variable for the observation year
-      mth <- (cods_sp$month[j])  # a variable for the observation month
+    for (j in 1:nrow(cod_sp)) {  
+      de <- cod_sp$depthlayerno[[j]]  # a variable for the observation depth layer
+      yr <- (cod_sp$year[j])  # a variable for the observation year
+      mth <- (cod_sp$month[j])  # a variable for the observation month
           if (brkyr == yr & brkmth == mth & brkvar == "temp.nc"){
-              cods_sp$temp_surface[j] <- extract(x=temp_brick[[1]], y = cods_sp[j, ]) 
+              cod_sp$temp_surface[j] <- extract(x=temp_brick[[1]], y = cod_sp[j, ]) 
               if (is.na(de)){
-                cods_sp$temp_depth[j] <- NA
+                cod_sp$temp_depth[j] <- NA
               } else  
-                cods_sp$temp_depth[j] <- extract(x=temp_brick[[de]], y = cods_sp[j, ])
+                cod_sp$temp_depth[j] <- extract(x=temp_brick[[de]], y = cod_sp[j, ])
           } else if (brkyr == yr & brkmth == mth & brkvar == "salinity.nc") {
-              cods_sp$salinity_surface[j] <- extract(x=temp_brick[[1]], y = cods_sp[j, ]) 
+              cod_sp$salinity_surface[j] <- extract(x=temp_brick[[1]], y = cod_sp[j, ]) 
               if (is.na(de)){
-                cods_sp$salinity_depth[j] <- NA
+                cod_sp$salinity_depth[j] <- NA
               } else  
-                cods_sp$salinity_depth[j] <- extract(x=temp_brick[[de]], y = cods_sp[j, ]) 
+                cod_sp$salinity_depth[j] <- extract(x=temp_brick[[de]], y = cod_sp[j, ]) 
           } else if (brkyr == yr & brkmth == mth & brkvar == "chl.nc") {
-              cods_sp$chl_surface[j] <- extract(x=temp_brick[[1]], y = cods_sp[j, ]) 
+              cod_sp$chl_surface[j] <- extract(x=temp_brick[[1]], y = cod_sp[j, ]) 
               if (is.na(de)){
-                cods_sp$chl_depth[j] <- NA
+                cod_sp$chl_depth[j] <- NA
               } else  
-                cods_sp$chl_depth[j] <- extract(x=temp_brick[[de]], y = cods_sp[j, ]) 
+                cod_sp$chl_depth[j] <- extract(x=temp_brick[[de]], y = cod_sp[j, ]) 
           } else if (brkyr == yr & brkmth == mth & brkvar == "o2.nc") {
-              cods_sp$o2_surface[j] <- extract(x=temp_brick[[1]], y = cods_sp[j, ]) 
+              cod_sp$o2_surface[j] <- extract(x=temp_brick[[1]], y = cod_sp[j, ]) 
               if (is.na(de)){
-                cods_sp$o2_depth[j] <- NA
+                cod_sp$o2_depth[j] <- NA
               } else  
-                cods_sp$o2_depth[j] <- extract(x=temp_brick[[de]], y = cods_sp[j, ]) 
+                cod_sp$o2_depth[j] <- extract(x=temp_brick[[de]], y = cod_sp[j, ]) 
           } else if (brkyr == yr & brkmth == mth & brkvar == "mlp.nc") {
-              cods_sp$mlp_surface[j] <- extract(x=temp_brick[[1]], y = cods_sp[j, ])
+              cod_sp$mlp_surface[j] <- extract(x=temp_brick[[1]], y = cod_sp[j, ])
           } else if (brkyr == yr & brkmth == mth & brkvar == "ssh.nc") {
-              cods_sp$ssh_surface[j] <- extract(x=temp_brick[[1]], y = cods_sp[j, ]) 
+              cod_sp$ssh_surface[j] <- extract(x=temp_brick[[1]], y = cod_sp[j, ]) 
             
           }
      
     }
 }
-cods <- as.data.frame(cods_sp)
-write.csv(cods,"../output/bio/presence_points_without_envdata_relooped.csv", row.names = FALSE)
-head(cods_sp$chl_depth)
+
+write.csv(cod_sp, "../data/bio/cod_all.csv", row.names = FALSE)
+
+cods <- as.data.frame(cod_sp)
 ```
 
+#convert kelvin to celsius
 
+```{r}
+cods$temp_celsius_depth <- kelvin.to.celsius(cods$temp_depth, round = 4) # 4 is the number of decimal places. the values are expressed to 4
+cods$temp_celsius_surface <- kelvin.to.celsius(cods$temp_surface, round = 4)
+write.csv(cods, "../data/bio/cod_all.csv", row.names = FALSE)
+```
 
+#load background points (generated from paper 2...)
+
+```{r}
+
+```
 
